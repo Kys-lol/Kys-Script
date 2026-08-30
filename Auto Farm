@@ -1,0 +1,251 @@
+-- =====================================================
+-- LOADER UI LIBRARY (ModernLua / KysHub UI)
+-- =====================================================
+local ModernV2
+local loaderOk, loaderResult = pcall(function()
+    local source = game:HttpGet("https://raw.githubusercontent.com/Kys-lol/KysHubNewUI/refs/heads/main/ModernLua.txt")
+    local fn, compileErr = loadstring(source)
+    if not fn then error(compileErr) end
+    return fn()
+end)
+
+if loaderOk then
+    ModernV2 = loaderResult
+else
+    warn("[DarkRed Hub] Failed to load UI Library:", loaderResult)
+    return
+end
+
+-- =====================================================
+-- SERVICES & VARIABLES
+-- =====================================================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
+-- Remote Events
+local remotesFolder = ReplicatedStorage:WaitForChild("Remotes", 10)
+local collectLeafRemote = remotesFolder and remotesFolder:WaitForChild("CollectLeaf", 10)
+local emptyBackpackRemote = remotesFolder and remotesFolder:WaitForChild("EmptyBackpack", 10)
+
+-- Variable State & Settings
+getgenv().LeafHub = getgenv().LeafHub or {
+    AutoCollect = false,
+    LoopSpeed = 0.1,
+    DupeAmount = 1,
+    MinRandom = 1,
+    MaxRandom = 1000,
+    AutoClear = false
+}
+
+local Config = getgenv().LeafHub
+
+-- =====================================================
+-- THEME & WINDOW SETUP
+-- =====================================================
+pcall(function()
+    ModernV2:AddTheme({
+        Name = "Dark Red Theme",
+        Accent = Color3.fromRGB(180, 0, 0),
+        Outline = Color3.fromRGB(255, 30, 30),
+        Text = Color3.fromRGB(255, 255, 255),
+        PlaceholderText = Color3.fromRGB(150, 100, 100)
+    })
+end)
+
+local MenuIcon = ModernV2:CreateMenuIcon({
+    Image = "rbxassetid://80891639562743",
+    Size = 48,
+    IconColor = Color3.fromRGB(255, 255, 255),
+    BGColor = Color3.fromRGB(20, 0, 0),
+    StrokeColor = Color3.fromRGB(180, 0, 0),
+    StrokeThick = 1.5,
+    Draggable = true,
+})
+
+local Window = ModernV2:Window({
+    Title = "Auto Farm",
+    Content = "Leaf Collector",
+    Uitransparent = 0.15,
+    Size = UDim2.fromOffset(500, 360),
+    Color = Color3.fromRGB(180, 0, 0),
+    Image = "80891639562743",
+    ShowUser = true,
+    Search = false,
+    ConfigEnabled = false,
+    NotifyOnCallbackError = false,
+    Loadingscreen = false,
+    Enable3DRenderer = false,
+    Keybind = "RightControl",
+})
+
+if MenuIcon and Window.AttachMenuIcon then
+    Window:AttachMenuIcon(MenuIcon)
+end
+
+Window:SetAccount({
+    Username = LocalPlayer.DisplayName,
+    Profile = ModernV2.UserProfile,
+    Expires = "Premium",
+})
+
+-- =====================================================
+-- TAB 1: MAIN COLLECTOR
+-- =====================================================
+local MainTab = Window:AddTab({
+    Name = "Main",
+    Icon = "lucide:leaf"
+})
+
+local MainSection = MainTab:AddSection({
+    Position = "Center",
+    Name = "Automation Features",
+    Icon = "lucide:play",
+    Box = true,
+    BoxBorder = true,
+    Opened = true,
+})
+
+-- Toggle Main Collector Loop
+MainSection:AddToggle({
+    Name = "Start Auto Collect Loop",
+    Flag = "AutoCollectToggle",
+    Default = Config.AutoCollect,
+    Callback = function(state)
+        Config.AutoCollect = state
+        if state then
+            task.spawn(function()
+                while Config.AutoCollect do
+                    if collectLeafRemote then
+                        for i = 1, Config.DupeAmount do
+                            local randomArg = math.random(Config.MinRandom, Config.MaxRandom)
+                            collectLeafRemote:FireServer(randomArg)
+                        end
+                    end
+                    task.wait(Config.LoopSpeed)
+                end
+            end)
+        end
+    end
+})
+
+-- Toggle Auto Clear Backpack
+MainSection:AddToggle({
+    Name = "Auto Clear Backpack (On Denied)",
+    Flag = "AutoClearToggle",
+    Default = Config.AutoClear,
+    Callback = function(state)
+        Config.AutoClear = state
+        if state then
+            Window:Notify({
+                Title = "Auto Clear Active",
+                Content = "Mendengarkan event CollectDenied...",
+                Duration = 2,
+                Icon = "lucide:check-circle"
+            })
+        end
+    end
+})
+
+-- =====================================================
+-- TAB 2: SETTINGS (MENGGUNAKAN SLIDER & TEXTBOX STABIL)
+-- =====================================================
+local SettingsTab = Window:AddTab({
+    Name = "Settings",
+    Icon = "lucide:sliders"
+})
+
+local SettingsSection = SettingsTab:AddSection({
+    Position = "Center",
+    Name = "Loop & Remote Config",
+    Icon = "lucide:settings",
+    Box = true,
+    BoxBorder = true,
+    Opened = true,
+})
+
+-- Slider Kecepatan Loop (Delay Detik)
+SettingsSection:AddSlider({
+    Name = "Kecepatan Loop (Detik)",
+    Flag = "LoopSpeedSlider",
+    Min = 0.01,
+    Max = 2,
+    Default = Config.LoopSpeed,
+    Decimals = 2,
+    Callback = function(value)
+        Config.LoopSpeed = value
+    end
+})
+
+-- Slider Jumlah Dupe / Fire Server
+SettingsSection:AddSlider({
+    Name = "Jumlah Dupe (Fire per Loop)",
+    Flag = "DupeAmountSlider",
+    Min = 1,
+    Max = 50,
+    Default = Config.DupeAmount,
+    Decimals = 0,
+    Callback = function(value)
+        Config.DupeAmount = math.floor(value)
+    end
+})
+
+-- Slider Min Random ID
+SettingsSection:AddSlider({
+    Name = "Min Random ID",
+    Flag = "MinRandomSlider",
+    Min = 1,
+    Max = 500,
+    Default = Config.MinRandom,
+    Decimals = 0,
+    Callback = function(value)
+        Config.MinRandom = math.floor(value)
+    end
+})
+
+-- Slider Max Random ID
+SettingsSection:AddSlider({
+    Name = "Max Random ID",
+    Flag = "MaxRandomSlider",
+    Min = 500,
+    Max = 10000,
+    Default = Config.MaxRandom,
+    Decimals = 0,
+    Callback = function(value)
+        Config.MaxRandom = math.floor(value)
+    end
+})
+
+-- =====================================================
+-- AUTO CLEAR LISTENER LOGIC
+-- =====================================================
+local function setupDeniedListener(remote)
+    if remote:IsA("RemoteEvent") then
+        remote.OnClientEvent:Connect(function(...)
+            if Config.AutoClear then
+                if emptyBackpackRemote then
+                    emptyBackpackRemote:FireServer()
+                    Window:Notify({
+                        Title = "Auto Clear",
+                        Content = "CollectDenied terdeteksi! Memanggil EmptyBackpack...",
+                        Duration = 2,
+                        Icon = "lucide:trash-2"
+                    })
+                end
+            end
+        end)
+    end
+end
+
+if remotesFolder then
+    local collectDenied = remotesFolder:FindFirstChild("CollectDenied")
+    if collectDenied then
+        setupDeniedListener(collectDenied)
+    end
+
+    remotesFolder.ChildAdded:Connect(function(child)
+        if child.Name == "CollectDenied" then
+            setupDeniedListener(child)
+        end
+    end)
+end
