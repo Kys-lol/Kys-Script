@@ -1,4 +1,3 @@
-loadstring(game:HttpGet("https://kys-script.base44.app/functions/getPublicScript?slug=WpUMz6Fyfk"))()
 local function __KysHub_Init_Main__()
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
