@@ -1,4 +1,3 @@
-loadstring(game:HttpGet("https://raw.githubusercontent.com/zidniilman100106/Mawww/1190b9f749ee92374ff46b278e84e26170eeeeff/Key-System.txt"))()
 local function __MawwwHub_Init_Main__()
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
