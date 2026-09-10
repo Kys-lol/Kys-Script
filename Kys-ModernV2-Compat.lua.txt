@@ -1,0 +1,396 @@
+--[[
+    Kys-ModernV2-Compat.lua
+    ------------------------------------------------------------------
+    Adapter/compatibility layer agar script yang ditulis untuk library
+    "MainV2 / ModernV2" bisa langsung dijalankan di atas library "Kys"
+    (Chloex) TANPA perlu mengubah kode script tersebut.
+
+    Cara pakai:
+    1. Ganti baris loadstring yang biasanya memuat MainV2, misalnya:
+
+           local Library = loadstring(game:HttpGet("URL_MAINV2"))()
+
+       menjadi memuat file ini:
+
+           local Library = loadstring(game:HttpGet("URL_COMPAT_INI"))()
+
+    2. Isi KYS_SOURCE_URL di bawah ini dengan URL/raw link ke file
+       Library-Kys-Final-Kys.txt (library Kys asli kamu, tidak diubah).
+
+    3. Sisa script (yang memanggil Library:CreateWindow, Window:AddTab,
+       Tab:AddSection, Section:AddToggle, dst) TIDAK PERLU diubah --
+       adapter ini yang menerjemahkan setiap panggilan ke API Kys.
+
+    CATATAN PENTING (baca sebelum pakai):
+    - Ini adalah *shim* yang menutup celah nama/parameter antara dua
+      API yang beda. Ia mencakup fitur-fitur yang paling umum dipakai
+      (Window, Tab, Section, Toggle, Slider, Dropdown, ColorPicker,
+      Keybind, TextInput, Button, Label, Paragraph, Notify, Flags).
+    - Fitur MainV2 yang sangat spesifik/canggih dan TIDAK ada
+      padanannya di Kys (mis. CodeBlock, ProgressBar, DependencyBox,
+      DependencyGroupbox, Category/Tabbox berlapis, 3D renderer,
+      UserFrame) akan otomatis di-"redam" jadi no-op yang aman
+      (tidak bikin script error / crash), tapi elemen itu memang
+      tidak akan tampil secara visual karena Kys tidak punya versi-nya.
+    - Kalau ada script yang error karena memanggil method yang belum
+      di-cover, kirim pesan errornya -- gampang ditambah, tinggal
+      mapping satu method baru.
+    ------------------------------------------------------------------
+]]
+
+local KYS_SOURCE_URL = "PASTE_URL_RAW_LIBRARY_KYS_DI_SINI"
+
+--============================================================
+-- 1. MEMUAT LIBRARY KYS ASLI (tidak dimodifikasi sama sekali)
+--============================================================
+local Kys
+if _G.KysLibrary then
+    -- Kalau kamu sudah memuat Kys sendiri sebelumnya dan menaruhnya
+    -- di _G.KysLibrary, adapter ini akan memakainya langsung.
+    Kys = _G.KysLibrary
+else
+    local ok, result = pcall(function()
+        return loadstring(game:HttpGet(KYS_SOURCE_URL))()
+    end)
+    if not ok or not result then
+        error("[Kys-Compat] Gagal memuat library Kys dari KYS_SOURCE_URL. " ..
+              "Pastikan URL sudah diisi dan valid. Detail: " .. tostring(result))
+    end
+    Kys = result
+end
+
+--============================================================
+-- 2. HELPER
+--============================================================
+local function safe(fn, ...)
+    if type(fn) ~= "function" then return end
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        warn("[Kys-Compat] Callback error: " .. tostring(err))
+    end
+end
+
+local function noopHandle(extra)
+    -- Dipakai untuk fitur MainV2 yang tidak ada di Kys, supaya
+    -- pemanggilan method lanjutan (:Set, :OnChanged, dst) tidak error.
+    local h = extra or {}
+    h.Value = h.Value
+    setmetatable(h, {
+        __index = function(_, _k)
+            return function(...) return h end
+        end
+    })
+    return h
+end
+
+-- Normalisasi keybind: MainV2 kadang pakai string ("RightControl"),
+-- Kys selalu pakai Enum.KeyCode.
+local function normalizeKeyCode(v)
+    if typeof(v) == "EnumItem" then return v end
+    if type(v) == "string" then
+        local ok, kc = pcall(function() return Enum.KeyCode[v] end)
+        if ok and kc then return kc end
+    end
+    return Enum.KeyCode.Unknown
+end
+
+-- Normalisasi warna: MainV2 kadang terima hex string ("#RRGGBB"),
+-- Kys selalu pakai Color3.
+local function normalizeColor(v)
+    if typeof(v) == "Color3" then return v end
+    if type(v) == "string" then
+        local ok, c = pcall(function() return Color3.fromHex((v:gsub("#", ""))) end)
+        if ok then return c end
+    end
+    return Color3.fromRGB(255, 255, 255)
+end
+
+-- Global registry ala ModernV2.Flags / ModernV2.Values, supaya script
+-- yang membaca Library.Flags[Flag].Value tetap jalan.
+local Compat = {}
+Compat.Flags = {}
+
+local function registerFlag(Config, handle)
+    local flag = Config.Flag or Config.ConfigKey or Config.Key
+    if flag then
+        Compat.Flags[flag] = handle
+    end
+end
+
+--============================================================
+-- 3. ITEM WRAPPERS (Toggle/Slider/Dropdown/ColorPicker/Keybind/
+--    TextInput/Button/Label/Paragraph)
+--============================================================
+
+local function wrapToggle(KysSection, Config)
+    Config = Config or {}
+    local handle = KysSection:AddToggle({
+        Title    = Config.Name or Config.Title or "Toggle",
+        Default  = Config.Default or false,
+        Callback = function(v) safe(Config.Callback, v) end,
+        Save     = Config.Save,
+    })
+    registerFlag(Config, handle)
+    return handle
+end
+
+local function wrapSlider(KysSection, Config)
+    Config = Config or {}
+    local increment = 1
+    if Config.Rounding ~= nil then
+        increment = 1 / (10 ^ (tonumber(Config.Rounding) or 0))
+    elseif Config.Increment or Config.Step then
+        increment = Config.Increment or Config.Step
+    end
+    local handle = KysSection:AddSlider({
+        Title     = Config.Name or Config.Title or "Slider",
+        Min       = Config.Min or 0,
+        Max       = Config.Max or 100,
+        Default   = Config.Default or Config.Min or 0,
+        Increment = increment,
+        Callback  = function(v) safe(Config.Callback, v) end,
+        Save      = Config.Save,
+    })
+    registerFlag(Config, handle)
+    return handle
+end
+
+local function wrapDropdown(KysSection, Config)
+    Config = Config or {}
+    local handle = KysSection:AddDropdown({
+        Title    = Config.Name or Config.Title or "Dropdown",
+        Options  = Config.Values or Config.Options or {},
+        Multi    = Config.Multi or false,
+        Default  = Config.Default,
+        Callback = function(v) safe(Config.Callback, v) end,
+        Save     = Config.Save,
+    })
+    registerFlag(Config, handle)
+    return handle
+end
+
+local function wrapColorPicker(KysSection, Config)
+    Config = Config or {}
+    local handle = KysSection:AddColorPicker({
+        Title    = Config.Name or Config.Title or "Color",
+        Default  = normalizeColor(Config.Default),
+        Callback = function(v) safe(Config.Callback, v) end,
+        Save     = Config.Save,
+    })
+    registerFlag(Config, handle)
+    return handle
+end
+
+local function wrapKeybind(KysSection, Config)
+    Config = Config or {}
+    local handle = KysSection:AddKeybind({
+        Title    = Config.Name or Config.Title or "Keybind",
+        Default  = normalizeKeyCode(Config.Default),
+        Callback = function(v)
+            safe(Config.Callback, v)
+            safe(Config.ChangedCallback, v)
+            safe(Config.OnChanged, v)
+        end,
+        Save     = Config.Save,
+    })
+    registerFlag(Config, handle)
+    return handle
+end
+
+local function wrapTextInput(KysSection, Config)
+    Config = Config or {}
+    local handle = KysSection:AddInput({
+        Title       = Config.Name or Config.Title or "Input",
+        Default     = Config.Default or "",
+        Placeholder = Config.Placeholder or "Input Here",
+        Callback    = function(v) safe(Config.Callback, v) end,
+        Save        = Config.Save,
+    })
+    registerFlag(Config, handle)
+    return handle
+end
+
+local function wrapButton(KysSection, Config)
+    Config = Config or {}
+    return KysSection:AddButton({
+        Title      = Config.Name or Config.Title or "Button",
+        Callback   = function() safe(Config.Callback) end,
+        SubTitle   = Config.SubTitle,
+        SubCallback = Config.SubCallback and function() safe(Config.SubCallback) end or nil,
+    })
+end
+
+local function wrapLabelOrParagraph(KysSection, ConfigOrText)
+    local Config = ConfigOrText
+    if type(ConfigOrText) ~= "table" then
+        Config = { Content = tostring(ConfigOrText or "") }
+    end
+    return KysSection:AddParagraph({
+        Title   = Config.Name or Config.Title or "Info",
+        Content = Config.Content or Config.Text or "",
+    })
+end
+
+--============================================================
+-- 4. SECTION WRAPPER
+--    Menyatukan API "idx" (MainV2 section) di atas Sections/Items
+--    milik Kys.
+--============================================================
+local function wrapSection(KysItems)
+    local Section = {}
+
+    function Section:AddToggle(Config) return wrapToggle(KysItems, Config) end
+    function Section:AddSlider(Config) return wrapSlider(KysItems, Config) end
+    function Section:AddDropdown(Config) return wrapDropdown(KysItems, Config) end
+    function Section:AddColorPicker(Config) return wrapColorPicker(KysItems, Config) end
+    function Section:AddKeybind(Config) return wrapKeybind(KysItems, Config) end
+    function Section:AddTextInput(Config) return wrapTextInput(KysItems, Config) end
+    function Section:AddButton(Config) return wrapButton(KysItems, Config) end
+    function Section:AddLabel(NameOrConfig) return wrapLabelOrParagraph(KysItems, NameOrConfig) end
+    function Section:AddParagraph(Config) return wrapLabelOrParagraph(KysItems, Config) end
+    function Section:AddDivider() if KysItems.AddDivider then return KysItems:AddDivider() end end
+    function Section:AddSpacer() if KysItems.AddSpace then return KysItems:AddSpace() end end
+
+    -- Fitur MainV2 lanjut yang belum ada di Kys -> no-op aman.
+    function Section:AddCodeBlock(_) return noopHandle() end
+    function Section:AddProgressBar(_) return noopHandle() end
+    function Section:AddImage(_) return noopHandle() end
+    function Section:AddDependencyBox(_) return noopHandle() end
+    function Section:AddDependencyGroupbox(_) return noopHandle() end
+    function Section:AddUserFrame(_) return noopHandle() end
+
+    return Kys and setmetatable(Section, { __index = function(_, k)
+        return function(...) return noopHandle() end
+    end }) or Section
+end
+
+--============================================================
+-- 5. TAB WRAPPER
+--============================================================
+local function wrapTab(KysTabs, TabConfig)
+    TabConfig = TabConfig or {}
+    local KysSections = KysTabs:AddTab({
+        Name = TabConfig.Name or TabConfig.Title or "Tab",
+        Icon = TabConfig.Icon or "",
+    })
+
+    local Tab = {}
+
+    function Tab:AddSection(Config)
+        Config = Config or {}
+        local KysItems = KysSections:AddSection(
+            Config.Name or Config.Title or "Section",
+            not Config.Collapsible
+        )
+        return wrapSection(KysItems)
+    end
+
+    -- Beberapa script MainV2 pakai AddLeftTabbox/AddRightTabbox/
+    -- AddCenterTabbox untuk membagi kolom. Kys tidak mengenal kolom,
+    -- jadi semuanya diarahkan ke section biasa (tetap tampil, hanya
+    -- tanpa pembagian kolom visual).
+    Tab.AddLeftTabbox = Tab.AddSection
+    Tab.AddRightTabbox = Tab.AddSection
+    Tab.AddCenterTabbox = Tab.AddSection
+    Tab.AddTabbox = Tab.AddSection
+
+    return Tab
+end
+
+--============================================================
+-- 6. WINDOW WRAPPER
+--============================================================
+function Compat:CreateWindow(Config)
+    Config = Config or {}
+
+    local title = Config.Title or Config.Name or "Window"
+    local image = Config.Image or Config.Logo
+    if image then
+        image = tostring(image):gsub("^rbxassetid://", "")
+    end
+
+    local ConfigSettings = (type(Config.Config) == "table" and Config.Config) or {}
+
+    local KysTabs = Kys:Window({
+        Title         = title,
+        Image         = image,
+        Color         = Config.Color,
+        ["Tab Width"] = Config.TabWidth,
+        Folder        = Config.ConfigFolder or ConfigSettings.ConfigFolder,
+        Search        = Config.Search,
+        Footer        = Config.Footer or Config.Content,
+        Author        = Config.Author,
+        Version       = Config.Version,
+        ShowInfo      = Config.ShowInfo,
+        KeySystem     = Config.KeySystem,
+    })
+
+    if not KysTabs then
+        -- Kys mengembalikan nil kalau KeySystem gagal (mis. user
+        -- salah masukkan key) -- teruskan nil sesuai perilaku aslinya.
+        return nil
+    end
+
+    local Window = {}
+    Window.Flags = Compat.Flags
+
+    function Window:AddTab(TabConfig)
+        return wrapTab(KysTabs, TabConfig)
+    end
+
+    -- Sebagian script MainV2 pakai Window:AddCategory(...):AddTab(...).
+    -- Kys tidak punya konsep "Category" (level di atas Tab), jadi
+    -- Category di-flatten: setiap Tab yang dibuat lewat Category akan
+    -- langsung jadi Tab biasa di Kys.
+    function Window:AddCategory(_CategoryConfig)
+        local Category = {}
+        function Category:AddTab(TabConfig)
+            return wrapTab(KysTabs, TabConfig)
+        end
+        return Category
+    end
+
+    function Window:Notify(NotifyConfig)
+        NotifyConfig = NotifyConfig or {}
+        return Kys:MakeNotify({
+            Title       = NotifyConfig.Title,
+            Description = NotifyConfig.Content or NotifyConfig.Description,
+            Content     = NotifyConfig.Content,
+            Delay       = NotifyConfig.Duration or NotifyConfig.Delay,
+            Color       = NotifyConfig.Color,
+            Icon        = NotifyConfig.Icon,
+        })
+    end
+
+    function Window:Unload()
+        if KysTabs.Window and KysTabs.Window.DestroyGui then
+            safe(KysTabs.Window.DestroyGui, KysTabs.Window)
+        end
+    end
+
+    return Window
+end
+
+Compat.Window = Compat.CreateWindow
+
+-- Notifier ala ModernV2.Notifier.new({Title=, Content=, Duration=})
+Compat.Notifier = {
+    new = function(NotifyConfig)
+        NotifyConfig = NotifyConfig or {}
+        return Kys:MakeNotify({
+            Title       = NotifyConfig.Title,
+            Description = NotifyConfig.Content,
+            Content     = NotifyConfig.Content,
+            Delay       = NotifyConfig.Duration,
+            Color       = NotifyConfig.Color,
+            Icon        = NotifyConfig.Icon,
+        })
+    end,
+}
+
+function Compat:Unload()
+    -- Diteruskan lewat Window:Unload(); disediakan juga di level atas
+    -- untuk script yang memanggil Library:Unload() langsung.
+end
+
+return Compat
